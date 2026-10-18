@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cubos carta</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@900&display=swap">
+<style>
+:root{--bg:#ece6da;--panel:#f7f3ea;--text:#3b342b;--border:#cfc5b2;--acc:#c0562f;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d1916;--panel:#2a2420;--text:#e0d6c8;--border:#4a4037;--acc:#e08a5f}}
+:root[data-theme="dark"]{--bg:#1d1916;--panel:#2a2420;--text:#e0d6c8;--border:#4a4037;--acc:#e08a5f}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;display:flex;flex-direction:column;overflow:hidden}
+#view{flex:1;min-height:0;position:relative}
+canvas#main{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+#hint{position:absolute;left:12px;top:10px;font-size:12px;opacity:.7;max-width:60%}
+#toast{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px;max-width:90%;text-align:center}
+#toast[hidden]{display:none}
+#tools{position:absolute;right:10px;top:10px;display:flex;flex-direction:column;gap:5px}
+#tools button{width:36px;height:36px;padding:0;font-size:18px;background:var(--panel)}
+#drawer{background:var(--panel);border-top:2px solid var(--border);padding:8px 10px;display:flex;flex-direction:column;gap:6px;height:min(30vh,190px)}
+.bar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.bar b{font-size:13px;margin-right:auto}
+button,select{font:inherit;font-size:13px;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 9px;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+#cards{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(60px,1fr));gap:4px;align-content:start}
+#cards canvas{width:100%;aspect-ratio:1;border:2px solid transparent;border-radius:6px;cursor:pointer;background:var(--bg)}
+#cards canvas.sel{border-color:var(--acc)}
+#cover{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:10;text-align:center;padding:20px}
+#cover[hidden]{display:none}
+#cover p{font-size:20px;margin:0 0 16px}
+#cover button{font-size:20px;padding:8px 18px;margin:4px}
+</style>
+</head>
+<body>
+<div id="view"><canvas id="main"></canvas>
+  <div id="hint">Vista fija desde una esquina: gira 90° o 180° con los botones · rueda/pellizco: zoom · toca una cara para pegar. Debe encajar con todos los cubos que toque: mismo palo, mismo número, o una cifra igual a la de la cara (la cara 7 acepta el 72).</div>
+  <div id="tools"><button id="rl" title="Girar 90°">⟲</button><button id="rr" title="Girar 90°">⟳</button><button id="r2" title="Girar 180°" style="font-size:12px">180°</button><button id="zi">+</button><button id="zo">−</button><button id="rs" title="Vista inicial">⌂</button></div>
+  <div id="toast" hidden></div>
+</div>
+<div id="drawer">
+  <div class="bar"><b id="info"></b>
+    <button id="draw">Robar y ceder turno</button>
+    <select id="np"><option value="2">2 jugadores</option><option value="3">3 jugadores</option><option value="4">4 jugadores</option></select>
+    <button id="new">Nueva partida</button></div>
+  <div id="cards"></div>
+</div>
+<div id="cover" hidden><div id="cbox"></div></div>
+<script>
+const FONT='"Playfair Display",Georgia,"Times New Roman",serif';
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+// ---------- símbolos vectoriales ----------
+const SP={
+S:new Path2D("M50 8C84 38 96 60 74 72C64 77 56 71 53 63C54 77 58 86 66 92H34C42 86 46 77 47 63C44 71 36 77 26 72C4 60 16 38 50 8Z"),
+H:new Path2D("M50 90C8 60 6 28 28 16C40 10 50 20 50 30C50 20 60 10 72 16C94 28 92 60 50 90Z"),
+D:new Path2D("M50 6C60 26 76 40 88 50C76 60 60 74 50 94C40 74 24 60 12 50C24 40 40 26 50 6Z")};
+(()=>{const p=new Path2D();[[50,28],[28,56],[72,56]].forEach(([x,y])=>{p.moveTo(x+19,y);p.arc(x,y,19,0,Math.PI*2)});
+p.moveTo(46,56);p.lineTo(54,56);p.lineTo(60,92);p.lineTo(40,92);p.closePath();SP.C=p})();
+const PAL={k:["#222228","#80808c"],r:["#8e1b1b","#e8573f"],p:["#4a2a82","#b085ea"]};
+function crown(ctx,n,gr){
+  ctx.save();ctx.translate(10,4);ctx.scale(.8,.8);
+  const p=new Path2D(n===3?"M18 66L14 28L34 46L50 20L66 46L86 28L82 66Z":"M14 66L10 26L28 44L38 18L50 42L62 18L72 44L90 26L86 66Z");
+  p.roundRect(16,70,68,11,5);
+  ctx.fillStyle=gr;ctx.fill(p);ctx.lineWidth=2.5;ctx.strokeStyle="rgba(255,255,255,.45)";ctx.stroke(p);ctx.restore();
+}
+function glyph(ctx,g,P){
+  const gr=ctx.createLinearGradient(15,10,85,95);gr.addColorStop(0,P[0]);gr.addColorStop(1,P[1]);
+  ctx.lineJoin="round";ctx.lineCap="round";ctx.textAlign="center";ctx.textBaseline="alphabetic";
+  if(g.k==="suit"){ctx.save();ctx.translate(12,12);ctx.scale(.76,.76);ctx.fillStyle=gr;ctx.fill(SP[g.s]);ctx.lineWidth=2.5;ctx.strokeStyle="rgba(255,255,255,.45)";ctx.stroke(SP[g.s]);ctx.restore();return}
+  if(g.k==="txt"){ctx.font=`900 92px ${FONT}`;ctx.fillStyle="rgba(0,0,0,.2)";ctx.fillText(g.s,53,84);ctx.fillStyle=gr;ctx.fillText(g.s,50,81);return}
+  const corner=t=>{ctx.font=`900 17px ${FONT}`;ctx.fillStyle=P[0];ctx.fillText(t,14,19)};
+  if(g.k==="J"){
+    corner("J");ctx.lineWidth=9;ctx.strokeStyle=gr;const a=Math.PI*1.7;
+    ctx.beginPath();ctx.arc(50,52,28,Math.PI*.25,a);ctx.stroke();
+    const e=[50+28*Math.cos(a),52+28*Math.sin(a)],t=[-Math.sin(a),Math.cos(a)],n=[Math.cos(a),Math.sin(a)];
+    ctx.beginPath();ctx.moveTo(e[0]+t[0]*16,e[1]+t[1]*16);ctx.lineTo(e[0]+n[0]*13,e[1]+n[1]*13);ctx.lineTo(e[0]-n[0]*13,e[1]-n[1]*13);ctx.closePath();ctx.fillStyle=gr;ctx.fill();
+    ctx.font=`900 34px ${FONT}`;ctx.fillText("+1",50,64);
+  }else if(g.k==="Q"||g.k==="K"){
+    corner(g.k);crown(ctx,g.k==="Q"?3:5,gr);ctx.font=`900 28px ${FONT}`;ctx.fillStyle=gr;ctx.fillText(g.k==="Q"?"+2":"+3",50,96);
+  }else if(g.k==="B"){
+    corner("B");ctx.lineWidth=10;ctx.strokeStyle=gr;ctx.beginPath();ctx.arc(50,52,30,0,Math.PI*2);ctx.moveTo(29,31);ctx.lineTo(71,73);ctx.stroke();
+  }else if(g.k==="R"){
+    corner("R");ctx.lineWidth=9;ctx.strokeStyle=gr;ctx.fillStyle=gr;
+    [[1,38],[-1,68]].forEach(([d,y])=>{ctx.beginPath();ctx.moveTo(50-d*28,y);ctx.lineTo(50+d*14,y);ctx.stroke();ctx.beginPath();ctx.moveTo(50+d*32,y);ctx.lineTo(50+d*10,y-14);ctx.lineTo(50+d*10,y+14);ctx.closePath();ctx.fill()});
+  }else if(g.k==="X"){
+    const p=new Path2D();for(let i=0;i<10;i++){const r=i%2?15:38,a=-Math.PI/2+i*Math.PI/5;p[i?"lineTo":"moveTo"](50+r*Math.cos(a),46+r*Math.sin(a))}p.closePath();
+    ctx.fillStyle=gr;ctx.fill(p);ctx.lineWidth=2.5;ctx.strokeStyle="rgba(255,255,255,.5)";ctx.stroke(p);
+    ctx.font=`900 15px ${FONT}`;ctx.fillStyle=P[0];ctx.fillText("JOKER",50,95);
+  }
+  if(g.s&&g.k!=="txt"){ctx.save();ctx.translate(80,6);ctx.scale(.16,.16);ctx.fillStyle=gr;ctx.fill(SP[g.s]);ctx.restore()}
+}
+const OWC=["#2d7ff9","#2eaa5a","#e6a21a","#a64de0"];
+function drawFace(ctx,o,u,v,g,fill,P,ow){
+  ctx.save();ctx.transform(u[0],u[1],v[0],v[1],o[0],o[1]);ctx.scale(.01,.01);
+  ctx.fillStyle=fill;ctx.fillRect(0,0,100,100);ctx.strokeStyle="#b5b5ae";ctx.lineWidth=2;ctx.strokeRect(0,0,100,100);
+  glyph(ctx,g,P);if(ow!=null){ctx.strokeStyle=OWC[ow];ctx.lineWidth=7;ctx.strokeRect(4,4,92,92)}ctx.restore();
+}
+// ---------- cartas: tabla del 9, J/Q/K y Joker ----------
+const deck=[],VALS=[...new Set([...[2,3,4,5,6,7,8,9].map(i=>9*i),...Array.from({length:13},(_,i)=>7*(i+2)),...Array.from({length:30},(_,i)=>3*(i+4))])].sort((a,b)=>a-b).filter(v=>String(v)[0]!==String(v)[1]);
+["S","H","D","C"].forEach(s=>{const red=s==="H"||s==="D";
+  VALS.forEach(v=>{const nm=ch=>ch==="0"||ch==="1"?"A":ch;deck.push({id:s+v,s,red,v,d1:nm(String(v)[0]),d2:nm(String(v)[1])})});
+  ["J","Q","K","B","R"].forEach(k=>deck.push({id:s+k,s,red,k,special:1}))});
+deck.push({id:"X1",k:"X",joker:1,special:1,s:null,red:false},{id:"X2",k:"X",joker:1,special:1,s:null,red:false});
+const byId=id=>deck.find(d=>d.id===id),mk=(c,x,y,z)=>({...c,x,y,z});
+const palOf=c=>c.joker&&!c.s?PAL.p:c.red?PAL.r:PAL.k;
+function contentFor(cb,f){
+  if(cb.special)return {k:cb.k,s:cb.s};
+  if(f==="t")return {k:"suit",s:cb.s};
+  return {k:"txt",s:(f==="px"||f==="ny")?cb.d2:cb.d1};
+}
+// ---------- proyección ----------
+function proj(p,cm){
+  const dx=p[0]-cm.c[0],dy=p[1]-cm.c[1],dz=p[2]-cm.c[2],cs=Math.cos(cm.psi),sn=Math.sin(cm.psi);
+  return [cm.ox+cm.s*(dx*cs-dy*sn),cm.oy+cm.s*((dx*sn+dy*cs)*Math.sin(cm.phi)-dz*Math.cos(cm.phi))];
+}
+const NORM={t:[0,0,1],px:[1,0,0],nx:[-1,0,0],py:[0,1,0],ny:[0,-1,0]};
+function facesOf(cb,cm){
+  const cs=Math.cos(cm.psi),sn=Math.sin(cm.psi),out=[];
+  for(const k in NORM){
+    const n=NORM[k],ny2=n[0]*sn+n[1]*cs;
+    if(ny2*Math.cos(cm.phi)+n[2]*Math.sin(cm.phi)<=.001)continue;
+    let o,u,v;
+    if(k==="t"){o=[cb.x,cb.y,cb.z+1];u=[1,0,0];v=[0,1,0]}
+    else{u=[n[1],-n[0],0];v=[0,0,-1];o=[cb.x+.5+n[0]/2-u[0]/2,cb.y+.5+n[1]/2-u[1]/2,cb.z+1]}
+    const P0=proj(o,cm),P1=proj(o.map((a,i)=>a+u[i]),cm),P2=proj(o.map((a,i)=>a+v[i]),cm);
+    out.push({k,ny2,o:P0,u:[P1[0]-P0[0],P1[1]-P0[1]],v:[P2[0]-P0[0],P2[1]-P0[1]]});
+  }
+  return out;
+}
+function drawCube(ctx,cb,cm){
+  facesOf(cb,cm).forEach(f=>{
+    const g=f.k==="t"?250:Math.round(200+35*f.ny2);
+    drawFace(ctx,f.o,f.u,f.v,contentFor(cb,f.k),`rgb(${g},${g},${g-3})`,palOf(cb),cb.o);
+  });
+}
+const poly=f=>[f.o,[f.o[0]+f.u[0],f.o[1]+f.u[1]],[f.o[0]+f.u[0]+f.v[0],f.o[1]+f.u[1]+f.v[1]],[f.o[0]+f.v[0],f.o[1]+f.v[1]]];
+function inPoly(p,x,y){let c=false;for(let i=0,j=3;i<4;j=i++){const a=p[i],b=p[j];if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])c=!c}return c}
+// ---------- estado ----------
+let cubes=[],hands=[],pile=[],cur=0,N=2,sel=null,hover=null,cm=null,locked=true,fx=null,scores=[],dir=1;const parts=[];
+const cam={psi:Math.PI/4,phi:.52,zoom:1,tpsi:null};
+const $=id=>document.getElementById(id),cv=$("main"),ctx=cv.getContext("2d");
+const has=(x,y,z)=>cubes.some(c=>c.x===x&&c.y===y&&c.z===z);
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]]}return a};
+function canJoin(cb,card,fk){
+  if(!card)return false;
+  if(card.joker)return true;
+  if(card.s&&card.s===cb.s)return true;
+  const key=c=>c.v??c.k;
+  if(!cb.joker&&key(card)===key(cb))return true;
+  if(cb.d1&&card.d1&&fk&&fk!=="t"){const dig=(fk==="px"||fk==="ny")?cb.d2:cb.d1;return card.d1===dig||card.d2===dig}
+  return false;
+}
+function camera(){
+  const dpr=devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+  if(cv.width!==W*dpr||cv.height!==H*dpr){cv.width=W*dpr;cv.height=H*dpr}
+  const mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
+  cubes.forEach(q=>[q.x,q.y,q.z].forEach((v,i)=>{mn[i]=Math.min(mn[i],v);mx[i]=Math.max(mx[i],v+1)}));
+  const c=mn.map((v,i)=>(v+mx[i])/2),R=Math.hypot(mx[0]-mn[0],mx[1]-mn[1],mx[2]-mn[2])/2;
+  cm={psi:cam.psi,phi:cam.phi,s:clamp(Math.min(W,H*.9)*.42/R,12,90)*cam.zoom,c,ox:W/2,oy:H/2+8,W,H,dpr};
+}
+function sorted(){
+  const sn=Math.sin(cm.psi),cs=Math.cos(cm.psi),d=q=>((q.x+.5-cm.c[0])*sn+(q.y+.5-cm.c[1])*cs)*Math.cos(cm.phi)+(q.z+.5-cm.c[2])*Math.sin(cm.phi);
+  return [...cubes].sort((a,b)=>d(a)-d(b));
+}
+const NB={t:[0,0,1],px:[1,0,0],nx:[-1,0,0],py:[0,1,0],ny:[0,-1,0]};
+const DIRS=[[1,0,0,"nx"],[-1,0,0,"px"],[0,1,0,"ny"],[0,-1,0,"py"],[0,0,1,"b"],[0,0,-1,"t"]];
+function fits(n,card){
+  if(!card)return false;
+  return DIRS.every(([a,b,c,k])=>{const nb=cubes.find(q=>q.x===n[0]+a&&q.y===n[1]+b&&q.z===n[2]+c);return !nb||canJoin(nb,card,k)});
+}
+function hit(mx,my){
+  for(const cb of sorted().reverse())for(const f of facesOf(cb,cm))if(inPoly(poly(f),mx,my)){
+    const d=NB[f.k],n=[cb.x+d[0],cb.y+d[1],cb.z+d[2]];
+    if(has(...n))return null;
+    return {cb,f,n,ok:fits(n,byId(sel))};
+  }
+  return null;
+}
+function render(){
+  camera();const{dpr,W,H}=cm,now=performance.now();
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
+  sorted().forEach(c=>{const fl=fx&&fx.set.includes(c)&&((now-fx.t0)/110|0)%2;ctx.globalAlpha=fl?.25:1;drawCube(ctx,c,cm);ctx.globalAlpha=1});
+  if(hover&&!locked){
+    const card=byId(sel);
+    if(card&&hover.ok){ctx.globalAlpha=.55;drawCube(ctx,mk(card,...hover.n),cm);ctx.globalAlpha=1}
+    const p=poly(hover.f);ctx.beginPath();p.forEach((q,i)=>i?ctx.lineTo(...q):ctx.moveTo(...q));ctx.closePath();
+    ctx.lineWidth=3;ctx.strokeStyle=hover.ok?getComputedStyle(document.documentElement).getPropertyValue("--acc"):"#c0392b";ctx.stroke();
+  }
+  parts.forEach(p=>{ctx.globalAlpha=Math.max(0,p.l);ctx.fillStyle=p.c;ctx.fillRect(p.x,p.y,p.r,p.r)});ctx.globalAlpha=1;
+  if(fx&&now-fx.t0<1000){ctx.font=`900 44px ${FONT}`;ctx.textAlign="center";ctx.fillStyle=getComputedStyle(document.documentElement).getPropertyValue("--acc");ctx.fillText("¡BRICK!",W/2,64)}
+}
+// ---------- bricks: 4 cubos formando un cuadrado 2×2 ----------
+function findBricks(){
+  const idx=new Map(cubes.map(c=>[c.x+","+c.y+","+c.z,c])),set=new Set();
+  cubes.forEach(c=>{
+    const q=[];for(let i=0;i<8;i++)q.push(idx.get((c.x+(i&1))+","+(c.y+(i>>1&1))+","+(c.z+(i>>2&1))));
+    if(q.every(Boolean))q.forEach(m=>set.add(m));
+  });
+  return [...set];
+}
+function brick(done){
+  const base=findBricks();if(!base.length)return done();
+  const all=new Set(base);cubes.forEach(c=>{if(base.some(m=>m.x===c.x&&m.y===c.y&&c.z>m.z))all.add(c)});
+  fx={set:[...all],t0:performance.now(),done,who:cur};locked=true;fxLoop();
+}
+function fxLoop(){
+  const now=performance.now();
+  if(fx&&now-fx.t0>1000){
+    fx.set.forEach(c=>{const p=proj([c.x+.5,c.y+.5,c.z+.5],cm);
+      for(let i=0;i<18;i++)parts.push({x:p[0],y:p[1],vx:(Math.random()-.5)*9,vy:-Math.random()*7,l:1,r:3+Math.random()*7,c:["#8a8a8a","#d8d8d2","#c0562f","#555"][i%4]});
+      cubes.splice(cubes.indexOf(c),1)});
+    {const cn=Array(N).fill(0);fx.set.forEach(c=>{if(c.o!=null)cn[c.o]++});
+      scores[fx.who]+=8;const mx=Math.max(...cn),top=cn.indexOf(mx);let msg=`¡Brick! J${fx.who+1} gana 8 puntos`;
+      if(mx>0&&cn.filter(v=>v===mx).length===1){scores[top]-=4;msg+=` · J${top+1} pierde 4 (más cubos propios)`}
+      toast(msg);refresh()}
+    if(!cubes.length)cubes.push(mk((n=>n[Math.random()*n.length|0])(deck.filter(d=>d.v)),0,0,0));
+    const d=fx.done;fx=null;d();
+  }
+  parts.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.4;p.l-=.02});
+  for(let i=parts.length-1;i>=0;i--)if(parts[i].l<=0)parts.splice(i,1);
+  render();if(fx||parts.length)requestAnimationFrame(fxLoop);
+}
+// ---------- turnos ----------
+let tt;function toast(t){const e=$("toast");e.textContent=t;e.hidden=false;clearTimeout(tt);tt=setTimeout(()=>e.hidden=true,3000)}
+function cover(html,btn,fn){$("cbox").innerHTML=`<p>${html}</p>`+btn.map((b,i)=>`<button data-i="${i}">${b}</button>`).join("");
+  $("cover").hidden=false;$("cbox").querySelectorAll("button").forEach(b=>b.onclick=()=>{$("cover").hidden=true;fn(+b.dataset.i)})}
+const nxt=(k=1)=>((cur+dir*k)%N+N)%N;
+function give(p,n){let g=0;while(n--&&pile.length){hands[p].push(pile.shift());g++}toast(`Jugador ${p+1} recibe ${g} cartas`)}
+function endTurn(skip=0){
+  cur=nxt(1+skip);sel=hands[cur][0]||null;refresh();render();
+  if(N>1)cover(`Turno del Jugador ${cur+1}`,["Empezar"],()=>locked=false);else locked=false;
+}
+function finish(){
+  scores[cur]+=10;
+  const t=scores.map((s,i)=>[i,s-hands[i].length]).sort((a,b)=>b[1]-a[1]);
+  cover(`🏆 Gana el Jugador ${t[0][0]+1}<br><small>`+t.map(([i,v])=>`J${i+1}: ${v}`).join(" · ")+`<br>puntos − cartas en mano, +10 por vaciar la mano</small>`,["Nueva partida"],newGame);
+}
+function afterPlace(card){
+  brick(()=>{
+    if(!hands[cur].length){finish();return}
+    if(card.k==="J"||(card.k==="R"&&N===2)){toast(`${card.k}: el Jugador ${cur+1} juega otra vez`);locked=false;refresh();render();return}
+    if(card.k==="Q")give(nxt(),2);
+    if(card.k==="K")give(nxt(),3);
+    if(card.k==="R"){dir=-dir;toast("¡Reversa! Cambia el sentido de los turnos")}
+    if(card.k==="B")toast(`Bloqueo: el Jugador ${nxt()+1} pierde su turno`);
+    endTurn(card.k==="B"?1:0);
+  });
+}
+function place(h){
+  if(locked||!h||!sel||!h.ok)return;
+  const card=byId(sel),cube=mk(card,...h.n);cube.o=cur;cubes.push(cube);
+  hands[cur].splice(hands[cur].indexOf(sel),1);sel=hands[cur][0]||null;hover=null;locked=true;refresh();render();
+  if(card.joker)cover("Joker: elige nuevo símbolo y color",["♠ negro","♥ rojo","♦ rojo","♣ negro"],i=>{cube.s="SHDC"[i];cube.red=i===1||i===2;render();afterPlace(card)});
+  else afterPlace(card);
+}
+// ---------- entrada: arrastrar = rotar, rueda/pellizco = zoom, toque = pegar ----------
+const pos=e=>{const r=cv.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top]};
+const ptrs=new Map();let moved=0,pinch0=0;
+const pd=()=>{if(ptrs.size<2)return 0;const[a,b]=[...ptrs.values()];return Math.hypot(a[0]-b[0],a[1]-b[1])};
+cv.addEventListener("pointerdown",e=>{cv.setPointerCapture(e.pointerId);ptrs.set(e.pointerId,[e.clientX,e.clientY]);moved=0;pinch0=pd()});
+cv.addEventListener("pointermove",e=>{
+  if(!ptrs.has(e.pointerId)){if(e.pointerType!=="touch"&&!locked){camera();hover=hit(...pos(e));render()}return}
+  const p=ptrs.get(e.pointerId),dx=e.clientX-p[0],dy=e.clientY-p[1];ptrs.set(e.pointerId,[e.clientX,e.clientY]);
+  if(ptrs.size===2){const d=pd();if(pinch0)cam.zoom=clamp(cam.zoom*d/pinch0,.3,5);pinch0=d;moved=99}
+  else{moved+=Math.abs(dx)+Math.abs(dy)}
+  render();
+});
+cv.addEventListener("pointerup",e=>{const was=ptrs.size===1&&moved<=8;ptrs.delete(e.pointerId);if(was){camera();place(hit(...pos(e)))}});
+cv.addEventListener("pointercancel",e=>ptrs.delete(e.pointerId));
+cv.addEventListener("pointerleave",()=>{if(!ptrs.size){hover=null;render()}});
+cv.addEventListener("wheel",e=>{e.preventDefault();cam.zoom=clamp(cam.zoom*Math.exp(-e.deltaY*.0015),.3,5);hover=null;render()},{passive:false});
+function tick(){if(cam.tpsi==null)return;const df=cam.tpsi-cam.psi;if(Math.abs(df)<.002){cam.psi=cam.tpsi;cam.tpsi=null}else cam.psi+=df*.2;hover=null;render();requestAnimationFrame(tick)}
+const spin=d=>{cam.tpsi=(cam.tpsi??cam.psi)+d;tick()};
+$("rl").onclick=()=>spin(-Math.PI/2);$("rr").onclick=()=>spin(Math.PI/2);$("r2").onclick=()=>spin(Math.PI);
+$("zi").onclick=()=>{cam.zoom=clamp(cam.zoom*1.25,.3,5);render()};$("zo").onclick=()=>{cam.zoom=clamp(cam.zoom/1.25,.3,5);render()};
+$("rs").onclick=()=>{cam.psi=Math.PI/4;cam.phi=.52;cam.zoom=1;cam.tpsi=null;render()};
+// ---------- mano ----------
+const box=$("cards"),minis={},mcm={psi:Math.PI/4,phi:.52,s:34,c:[.5,.5,.5],ox:32,oy:32};
+deck.forEach(c=>{const m=document.createElement("canvas");m.width=m.height=128;m.onclick=()=>{sel=c.id;refresh()};minis[c.id]=m;box.appendChild(m)});
+function drawMinis(){deck.forEach(c=>{const g=minis[c.id].getContext("2d");g.setTransform(2,0,0,2,0,0);g.clearRect(0,0,64,64);drawCube(g,mk(c,0,0,0),mcm)})}
+function refresh(){
+  const h=hands[cur]||[];
+  deck.forEach(c=>minis[c.id].style.display=h.includes(c.id)?"":"none");
+  h.forEach(id=>{box.appendChild(minis[id]);minis[id].classList.toggle("sel",id===sel)});
+  $("info").textContent=`Jugador ${cur+1}${dir>0?" ↻":" ↺"} · ${scores[cur]||0} pts · baraja ${pile.length}`+hands.map((x,i)=>i===cur?"":` · J${i+1}: ${x.length} cartas, ${scores[i]||0} pts`).join("");
+  $("draw").disabled=locked;
+}
+$("draw").onclick=()=>{
+  if(locked)return;locked=true;
+  if(pile.length){hands[cur].push(pile.shift());toast(`Jugador ${cur+1} roba una carta y cede el turno`)}else toast(`Baraja vacía: Jugador ${cur+1} cede el turno`);
+  endTurn();
+};
+function newGame(){
+  N=+$("np").value;cubes=[];fx=null;parts.length=0;scores=Array(N).fill(0);dir=1;
+  let ok=false,tries=0;
+  while(!ok&&tries++<200){
+    pile=shuffle(deck.map(d=>d.id));
+    const si=pile.findIndex(i=>byId(i).v),st=pile.splice(si,1)[0];
+    hands=Array.from({length:N},(_,i)=>pile.slice(i*5,i*5+5));
+    ok=hands.every(h=>{const s=h.map(byId).filter(c=>!c.joker);return s.some(c=>c.red)&&s.some(c=>!c.red)});
+    cubes=[mk(byId(st),0,0,0)];
+  }
+  pile=pile.slice(N*5);cur=0;sel=hands[0][0];refresh();render();
+  cover(N>1?"Turno del Jugador 1":"Tu turno",["Empezar"],()=>locked=false);
+}
+$("new").onclick=newGame;$("np").onchange=newGame;
+new ResizeObserver(render).observe(cv);drawMinis();newGame();
+document.fonts.load('900 40px "Playfair Display"').then(()=>{drawMinis();render()}).catch(()=>{});
+</script>
+</body>
+</html>
